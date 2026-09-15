@@ -44,8 +44,15 @@ jobs:
 
           echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
+          # .Image is a MAP KEYED BY PLATFORM for a multi-platform index, not a
+          # single object -- "{{ index .Image.Config.Labels ... }}" fails with
+          # "index of untyped nil". That error would be swallowed by the
+          # fallback below into an empty string, which never matches the SHA,
+          # so the early-exit would invert into a guaranteed daily QEMU rebuild
+          # with no visible failure. Verified against the real published image.
           published="$(docker buildx imagetools inspect "${image}:nightly" --format \
-            '{{ index .Image.Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null || true)"
+            '{{ index (index .Image "linux/amd64").Config.Labels "org.opencontainers.image.revision" }}' \
+            2>/dev/null || true)"
           echo "published nightly revision: ${published:-<none>}"
 
           if [ "${published}" = "${sha}" ] && [ "${{ inputs.force }}" != "true" ]; then
