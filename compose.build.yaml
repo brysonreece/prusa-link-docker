@@ -1,0 +1,15 @@
+# Build locally instead of pulling from GHCR:
+#   docker compose -f compose.yaml -f compose.build.yaml up -d --build
+#
+# PRUSALINK_SPEC must pin a 40-character commit SHA. Pinning a branch is what
+# made the previous generation of PrusaLink images unreproducible.
+services:
+  prusalink:
+    image: prusalink:local
+    build:
+      context: .
+      args:
+        # Tag 0.8.1
+        PRUSALINK_SPEC: "prusalink @ git+https://github.com/prusa3d/Prusa-Link.git@31e85687953b7b91c14ba8522293cd135f4c39ba"
+        PRUSALINK_VERSION: "0.8.1"
+        PRUSALINK_REVISION: "31e85687953b7b91c14ba8522293cd135f4c39ba"

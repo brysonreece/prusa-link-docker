@@ -1,0 +1,6 @@
+# Runtime state created by compose on the host
+/data/
+/config/
+
+# Local design and planning notes
+/docs/

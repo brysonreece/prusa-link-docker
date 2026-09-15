@@ -1,0 +1,65 @@
+services:
+  prusalink:
+    image: ghcr.io/brysonreece/prusalink:latest
+    container_name: prusalink
+    restart: unless-stopped
+
+    # PrusaLink's shutdown is clean but not fast, and Docker's default grace
+    # period is only 10s -- which SIGKILLs a healthy shutdown two-thirds of the
+    # way through. prusa_link.stop() enqueues an M117 "PrusaLink stopped" to the
+    # printer's LCD and then waits out STATE_CHANGE_TIMEOUT (const.py:86, 15s)
+    # if the printer does not answer. Measured worst case with no printer
+    # attached: 17s. 30s leaves margin.
+    stop_grace_period: 30s
+
+    # Host networking is a correctness requirement, not a convenience.
+    #
+    # ip_updater.py enumerates the host's NICs, finds the one holding the
+    # current IP, and reports that address (plus MAC and SSID) to Prusa
+    # Connect; service_discovery.py advertises the same address over mDNS. In
+    # bridge mode both faithfully report the container's 172.x address, so
+    # Connect's "Open PrusaLink" button links nowhere and mDNS discovery points
+    # at a dead host. Nothing errors -- the local UI works fine -- which is why
+    # this is easy to miss.
+    #
+    # Note: this is a no-op on Docker Desktop for macOS/Windows. See README for
+    # a bridge-mode alternative and its tradeoffs.
+    network_mode: host
+
+    devices:
+      # /dev/ttyACM0 renumbers when USB devices enumerate in a different order
+      # after a reboot, silently becoming ttyACM1. The by-id path is derived
+      # from the printer's own serial number and never changes. Find yours:
+      #   ls -l /dev/serial/by-id/
+      # It is mapped to /dev/ttyACM0 inside so the config stays boring.
+      - /dev/serial/by-id/usb-Prusa_Research__prusa3d.com__Original_Prusa_i3_MK3_CZPX0000X000XK00000-if00:/dev/ttyACM0
+
+    volumes:
+      # Every mutable thing PrusaLink owns: uploaded gcode, printer settings,
+      # power-panic state, the PID file.
+      - ./data:/data
+
+      # prusalink.ini. Seeded on first run, yours to edit afterwards.
+      - ./config:/etc/prusalink
+
+      # Required for `port = auto`. util.py matches ID_VENDOR_ID/ID_MODEL_ID
+      # udev properties against the supported printer list; without this mount
+      # those properties are empty and auto-detection finds nothing. Drop it if
+      # you set an explicit port in prusalink.ini.
+      - /run/udev:/run/udev:ro
+
+    environment:
+      # Ownership of ./data and ./config on the host. Match these to your own
+      # user (`id -u`, `id -g`) to keep the files editable.
+      PUID: 1000
+      PGID: 1000
+      TZ: Etc/UTC
+
+      # Applied only when seeding prusalink.ini on first run.
+      # PRUSALINK_PORT: 8080
+      # PRUSALINK_SERIAL_PORT: /dev/ttyACM0
+
+    # Serial access comes from the entrypoint matching the device's own group
+    # GID, so no privileged: true and no root at runtime.
+    security_opt:
+      - no-new-privileges:true

@@ -1,0 +1,42 @@
+# Bridge-networking variant, for hosts where network_mode: host is unavailable
+# (Docker Desktop on macOS/Windows) or unwanted.
+#
+# Read this first: PrusaLink will report the container's internal IP to Prusa
+# Connect, so remote access through connect.prusa3d.com will not work, and mDNS
+# discovery will advertise an unroutable address. The local web UI on
+# http://<host>:8080 works normally. Accept that tradeoff knowingly.
+#
+#   docker compose -f compose.bridge.yaml up -d
+
+services:
+  prusalink:
+    image: ghcr.io/brysonreece/prusalink:latest
+    container_name: prusalink
+    restart: unless-stopped
+
+    # PrusaLink's shutdown is clean but not fast, and Docker's default grace
+    # period is only 10s -- which SIGKILLs a healthy shutdown two-thirds of the
+    # way through. prusa_link.stop() enqueues an M117 "PrusaLink stopped" to the
+    # printer's LCD and then waits out STATE_CHANGE_TIMEOUT (const.py:86, 15s)
+    # if the printer does not answer. Measured worst case with no printer
+    # attached: 17s. 30s leaves margin.
+    stop_grace_period: 30s
+
+    ports:
+      - "8080:8080"
+
+    devices:
+      - /dev/serial/by-id/usb-Prusa_Research__prusa3d.com__Original_Prusa_i3_MK3_CZPX0000X000XK00000-if00:/dev/ttyACM0
+
+    volumes:
+      - ./data:/data
+      - ./config:/etc/prusalink
+      - /run/udev:/run/udev:ro
+
+    environment:
+      PUID: 1000
+      PGID: 1000
+      TZ: Etc/UTC
+
+    security_opt:
+      - no-new-privileges:true

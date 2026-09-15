@@ -1,0 +1,45 @@
+; PrusaLink configuration.
+;
+; Seeded from a template on first start and never rewritten afterwards -- this
+; file is yours to edit. Restart the container to pick up changes.
+
+[daemon]
+; Set explicitly rather than left to default. config.py resolves pid_file,
+; power_panic, threshold.data, prusa_printer_settings.ini and the gcode
+; directory relative to data_dir, so pinning it here puts all of PrusaLink's
+; mutable state inside the single mounted volume instead of wherever the
+; running user's home happens to resolve to.
+data_dir = @DATA_DIR@
+
+pid_file = ./prusalink.pid
+power_panic_file = ./power_panic
+threshold_file = ./threshold.data
+
+[http]
+; 0.0.0.0 is correct even under network_mode: host -- it binds every interface
+; on the host, which is what makes PrusaLink reachable from your LAN.
+address = 0.0.0.0
+port = @PORT@
+
+; Special /link-info debug page.
+; link_info = False
+
+[printer]
+; "auto" matches ID_VENDOR_ID/ID_MODEL_ID udev properties against the supported
+; printer list, which requires /run/udev:/run/udev:ro to be mounted. Without
+; that mount, set an explicit device path here instead:
+;   port = /dev/ttyACM0
+port = @SERIAL_PORT@
+
+baudrate = 115200
+settings = ./prusa_printer_settings.ini
+directory = ./PrusaLink gcodes
+
+; Dangerous: writes to the EEPROM on the little 32u2/8u2 each time an SD print
+; starts or ends, wearing it out after roughly 50 000 prints. Enabling it buys
+; PowerPanic for SD prints over USB.
+; reset_disabling = False
+
+[cameras]
+; Requires a /dev/video* device to be passed into the container.
+; auto_detect = True
