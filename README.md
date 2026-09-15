@@ -11,7 +11,7 @@ docker pull ghcr.io/brysonreece/prusalink:latest
 |---|---|
 | `:latest` | Newest upstream **release** |
 | `:0.8.1`, `:0.8` | A specific release / minor line |
-| `:nightly` | Current `master` (upstream's default branch), rebuilt only when it moves |
+| `:nightly` | Current `master` (upstream's default branch), rebuilt only when it moves — currently `0.8.2`, which upstream has not tagged |
 | `:nightly-<sha>` | A specific nightly, for pinning and rollback |
 
 Built for `linux/amd64` and `linux/arm64`.
@@ -231,8 +231,13 @@ reference in `compose.yaml`.
 
 ## Troubleshooting
 
-**`no serial devices found in the container`** — the `devices:` mapping is
-missing or the path is wrong. Check `ls -l /dev/serial/by-id/`.
+**`required variable PRUSALINK_DEVICE is missing a value`** — set it in `.env`
+(copy `.env.example`). Find the path with `ls -l /dev/serial/by-id/`.
+
+**`no serial devices found in the container`** — `PRUSALINK_DEVICE` points at a
+path that does not exist on the host, so nothing was passed through. Re-check
+`ls -l /dev/serial/by-id/`; the value must be the full path, not just the
+`usb-...` filename.
 
 **`port = auto but /run/udev is not mounted`** — add the mount, or set an
 explicit `port` in `config/prusalink.ini`.
@@ -257,8 +262,9 @@ bugs there, and packaging bugs here.
 It supersedes [donslice/prusa-link-docker](https://github.com/donslice/prusa-link-docker),
 which is unmaintained and installs from unpinned git branches.
 
-`docs/plans/2026-09-15-prusalink-docker-design.md` records the full source
-review behind these decisions.
+The reasoning behind each non-obvious choice is recorded in comments next to
+the code it explains -- the `Dockerfile`, `docker-entrypoint.sh` and
+`compose.yaml` all cite the upstream source line that motivated them.
 
 ## License
 
