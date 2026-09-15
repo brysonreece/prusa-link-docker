@@ -1,0 +1,95 @@
+# Validates the image on pull requests without publishing anything.
+# amd64 only: catching a broken Dockerfile does not require paying the QEMU
+# arm64 tax, and the release path covers both arches.
+name: pr
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - docker-entrypoint.sh
+      - healthcheck.py
+      - prusalink.ini.template
+      - .github/workflows/**
+  # Also on direct pushes to main. A clean checkout is the only thing that
+  # catches a build input that exists on a developer's disk but was never
+  # committed -- exactly how prusalink.ini.template went missing when
+  # .gitignore's /config/ rule, meant for compose's runtime mount, swallowed
+  # it. Nothing validated main until the first PR, which may never come.
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - docker-entrypoint.sh
+      - healthcheck.py
+      - prusalink.ini.template
+      - .github/workflows/**
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint the entrypoint
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          bash -n docker-entrypoint.sh
+          shellcheck docker-entrypoint.sh
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build (amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: prusalink:pr
+          build-args: |
+            PRUSALINK_SPEC=prusalink @ git+https://github.com/prusa3d/Prusa-Link.git@31e85687953b7b91c14ba8522293cd135f4c39ba
+            PRUSALINK_VERSION=pr
+            PRUSALINK_REVISION=31e85687953b7b91c14ba8522293cd135f4c39ba
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Boot the container and wait for a healthy status
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pl/data /tmp/pl/config
+          docker run -d --name pl -p 8080:8080 \
+            -v /tmp/pl/data:/data -v /tmp/pl/config:/etc/prusalink \
+            prusalink:pr
+
+          for _ in $(seq 1 60); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' pl)"
+            [ "${status}" = "healthy" ] && break
+            [ "${status}" = "unhealthy" ] && { docker logs pl; exit 1; }
+            sleep 5
+          done
+          [ "$(docker inspect -f '{{.State.Health.Status}}' pl)" = "healthy" ] \
+            || { docker logs pl; exit 1; }
+
+          # No placeholder may survive config seeding.
+          if grep -q '@[A-Z_]*@' /tmp/pl/config/prusalink.ini; then
+            echo "::error::unsubstituted placeholders in seeded config"
+            grep '@[A-Z_]*@' /tmp/pl/config/prusalink.ini
+            exit 1
+          fi
+
+          # Shutdown must be clean (exit 0), not SIGKILLed (exit 137). This is
+          # the regression test for STOPSIGNAL SIGINT plus an adequate grace
+          # period -- the clean path takes ~17s against a 10s default.
+          #
+          # Waiting for healthy above is load-bearing, not incidental: stopping
+          # inside the ~6s startup window exits 130, because PrusaLink guards
+          # startup with `except Exception` while KeyboardInterrupt is a
+          # BaseException. Asserting 0 before that window closes would be flaky.
+          docker stop --time 40 pl
+          code="$(docker inspect -f '{{.State.ExitCode}}' pl)"
+          echo "exit code: ${code}"
+          [ "${code}" = "0" ] || { echo "::error::unclean shutdown (${code})"; docker logs pl; exit 1; }

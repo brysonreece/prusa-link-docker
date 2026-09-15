@@ -1,0 +1,80 @@
+# Builds one upstream release tag. Normally dispatched by watch-upstream.yml;
+# also runnable by hand to rebuild or backfill a specific version.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Upstream release tag to build (e.g. 0.8.1)
+        required: true
+        type: string
+      latest:
+        description: Also move the :latest tag to this build
+        required: false
+        default: true
+        type: boolean
+  repository_dispatch:
+    types: [upstream-release]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      version: ${{ steps.resolve.outputs.version }}
+      tags: ${{ steps.resolve.outputs.tags }}
+    steps:
+      - name: Resolve tag to an immutable SHA
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.event.client_payload.tag }}
+          LATEST: ${{ inputs.latest == null && 'true' || inputs.latest }}
+        run: |
+          set -euo pipefail
+          [ -n "${TAG}" ] || { echo "::error::no tag supplied"; exit 1; }
+
+          # An annotated tag's ref points at a tag object, not a commit, so
+          # dereference before pinning. Building the tag object's SHA would
+          # fail; building a tag *name* would be unreproducible.
+          obj_type="$(gh api "repos/prusa3d/Prusa-Link/git/ref/tags/${TAG}" --jq '.object.type')"
+          if [ "${obj_type}" = "tag" ]; then
+            sha="$(gh api "repos/prusa3d/Prusa-Link/git/ref/tags/${TAG}" --jq '.object.sha' \
+                   | xargs -I{} gh api "repos/prusa3d/Prusa-Link/git/tags/{}" --jq '.object.sha')"
+          else
+            sha="$(gh api "repos/prusa3d/Prusa-Link/git/ref/tags/${TAG}" --jq '.object.sha')"
+          fi
+          echo "${TAG} -> ${sha}"
+
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/prusalink"
+          tags="${image}:${TAG}"
+
+          # A X.Y convenience tag, but only for a plain numeric version --
+          # upstream ships prereleases like 0.7.1rc1 that must never claim it.
+          if [[ "${TAG}" =~ ^([0-9]+\.[0-9]+)\.[0-9]+$ ]]; then
+            tags="${tags}"$'\n'"${image}:${BASH_REMATCH[1]}"
+          fi
+          if [ "${LATEST}" = "true" ]; then
+            tags="${tags}"$'\n'"${image}:latest"
+          fi
+
+          {
+            echo "sha=${sha}"
+            echo "version=${TAG}"
+            echo "tags<<EOF"
+            echo "${tags}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    uses: ./.github/workflows/build.yml
+    with:
+      sha: ${{ needs.resolve.outputs.sha }}
+      version: ${{ needs.resolve.outputs.version }}
+      tags: ${{ needs.resolve.outputs.tags }}

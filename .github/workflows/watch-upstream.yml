@@ -1,0 +1,71 @@
+# Polls prusa3d/Prusa-Link for a release this repository has not published yet.
+#
+# State lives in the registry rather than a committed file: the question "have
+# we built 0.8.1?" is answered by asking GHCR whether that tag exists. That is
+# self-healing (delete a tag and it rebuilds), needs no bot commits, and cannot
+# drift from reality the way a checked-in state file can.
+name: watch-upstream
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      needed: ${{ steps.check.outputs.needed }}
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - name: Look for an unpublished release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # /releases/latest already excludes drafts and prereleases, so the
+          # rc tags upstream publishes never reach this pipeline.
+          tag="$(gh api repos/prusa3d/Prusa-Link/releases/latest --jq '.tag_name')"
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/prusalink"
+          echo "upstream latest release: ${tag}"
+
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+          if docker buildx imagetools inspect "${image}:${tag}" >/dev/null 2>&1; then
+            echo "${image}:${tag} already published; nothing to do"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::${tag} is not published yet -- triggering a release build"
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          fi
+
+  dispatch:
+    needs: check
+    if: needs.check.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # A PAT is required because GITHUB_TOKEN-triggered events deliberately do
+      # not start further workflow runs, which would otherwise make this a
+      # silent no-op. Falls back to GITHUB_TOKEN so a fork without the secret
+      # still reports something useful rather than failing opaquely.
+      - name: Trigger release build
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${{ secrets.DISPATCH_TOKEN }}" ]; then
+            echo "::warning::DISPATCH_TOKEN is not set. GITHUB_TOKEN cannot start"
+            echo "::warning::another workflow, so run the release workflow manually:"
+            echo "::warning::  gh workflow run release.yml -f tag=${{ needs.check.outputs.tag }}"
+            exit 0
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/dispatches" \
+            -f event_type=upstream-release \
+            -F "client_payload[tag]=${{ needs.check.outputs.tag }}"

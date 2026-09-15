@@ -1,0 +1,83 @@
+# Rebuilds :nightly when master moves.
+#
+# Upstream commits a handful of times a year, so the common case is "nothing
+# changed". Rather than burn a QEMU arm64 build to discover that, the current
+# :nightly image's org.opencontainers.image.revision label is read back and
+# compared against master's HEAD.
+name: nightly
+
+on:
+  schedule:
+    - cron: '43 5 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build even if master has not moved
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+      sha: ${{ steps.check.outputs.sha }}
+      version: ${{ steps.check.outputs.version }}
+      tags: ${{ steps.check.outputs.tags }}
+    steps:
+      - name: Compare master HEAD against the published nightly
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # The default branch upstream is master, not main.
+          sha="$(gh api repos/prusa3d/Prusa-Link/commits/master --jq '.sha')"
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/prusalink"
+          echo "master HEAD: ${sha}"
+
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+          published="$(docker buildx imagetools inspect "${image}:nightly" --format \
+            '{{ index .Image.Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null || true)"
+          echo "published nightly revision: ${published:-<none>}"
+
+          if [ "${published}" = "${sha}" ] && [ "${{ inputs.force }}" != "true" ]; then
+            echo "master has not moved; skipping the build"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Version comes from upstream's own __init__.py so the label reflects
+          # what the code calls itself (currently 0.8.2), not a guess.
+          version="$(gh api "repos/prusa3d/Prusa-Link/contents/prusa/link/__init__.py?ref=${sha}" \
+            --jq '.content' | base64 -d | sed -n 's/^__version__ = "\(.*\)"$/\1/p')"
+          version="${version:-unknown}-nightly"
+          echo "version: ${version}"
+
+          {
+            echo "changed=true"
+            echo "sha=${sha}"
+            echo "version=${version}"
+            echo "tags<<EOF"
+            echo "${image}:nightly"
+            # A pinnable, immutable alias so a bad nightly can be rolled back to
+            # a specific known-good one.
+            echo "${image}:nightly-${sha:0:7}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      sha: ${{ needs.check.outputs.sha }}
+      version: ${{ needs.check.outputs.version }}
+      tags: ${{ needs.check.outputs.tags }}

@@ -1,0 +1,85 @@
+# Reusable multi-arch build. Every caller resolves a ref to a commit SHA first
+# and passes the SHA here -- this workflow never resolves a branch or tag
+# itself, so what gets built is always pinned by the caller.
+name: build
+
+on:
+  workflow_call:
+    inputs:
+      sha:
+        description: Full 40-character commit SHA of prusa3d/Prusa-Link to build
+        required: true
+        type: string
+      version:
+        description: Human-readable version for the image label (e.g. 0.8.1, 0.8.2-nightly)
+        required: true
+        type: string
+      tags:
+        description: Newline-separated list of fully-qualified image tags to push
+        required: true
+        type: string
+      push:
+        description: Push to the registry (false builds only, for PR validation)
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate SHA is fully pinned
+        run: |
+          # A branch name or short SHA here would silently reintroduce the
+          # unreproducible builds this repository exists to avoid.
+          if ! [[ "${{ inputs.sha }}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::sha must be a full 40-character commit SHA, got '${{ inputs.sha }}'"
+            exit 1
+          fi
+
+      # arm64 has no native runner here, so it builds under emulation. The two
+      # dependencies without wheels (python-prctl, zeroconf) compile roughly
+      # 10-20x slower as a result. Acceptable given upstream releases about
+      # twice a year; revisit with native arm64 runners if that changes.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        if: inputs.push
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ inputs.push }}
+          tags: ${{ inputs.tags }}
+          build-args: |
+            PRUSALINK_SPEC=prusalink @ git+https://github.com/prusa3d/Prusa-Link.git@${{ inputs.sha }}
+            PRUSALINK_VERSION=${{ inputs.version }}
+            PRUSALINK_REVISION=${{ inputs.sha }}
+          # The revision label is load-bearing, not decorative: nightly.yml
+          # reads it back off the published image to decide whether upstream
+          # has moved, which is what keeps registry state authoritative and
+          # avoids committing a state file to this repo.
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.sha }}
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.created=${{ github.event.repository.updated_at }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
