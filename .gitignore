@@ -4,3 +4,6 @@
 
 # Local design and planning notes
 /docs/
+
+# Local environment (device path, etc.)
+.env

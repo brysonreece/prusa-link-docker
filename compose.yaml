@@ -27,12 +27,24 @@ services:
     network_mode: host
 
     devices:
-      # /dev/ttyACM0 renumbers when USB devices enumerate in a different order
-      # after a reboot, silently becoming ttyACM1. The by-id path is derived
-      # from the printer's own serial number and never changes. Find yours:
+      # Required. Set PRUSALINK_DEVICE in a .env file next to this compose file
+      # to your printer's stable by-id path -- find it with:
       #   ls -l /dev/serial/by-id/
-      # It is mapped to /dev/ttyACM0 inside so the config stays boring.
-      - /dev/serial/by-id/usb-Prusa_Research__prusa3d.com__Original_Prusa_i3_MK3_CZPX0000X000XK00000-if00:/dev/ttyACM0
+      #
+      # The by-id path matters: /dev/ttyACM0 renumbers when USB devices
+      # enumerate in a different order after a reboot and the printer silently
+      # becomes ttyACM1. This path derives from the printer's own serial number
+      # and never changes. It is mapped to /dev/ttyACM0 inside the container so
+      # the config stays boring.
+      #
+      # The :? form makes compose fail with the message below -- naming the
+      # variable and how to find its value -- instead of letting Docker report
+      # an opaque "no such file or directory" for a placeholder path.
+      #
+      # That message must not contain a colon: compose splits a device entry on
+      # colons to find host:container, so a colon inside the message makes it
+      # mis-split and report "missing a mount target" instead of the real error.
+      - ${PRUSALINK_DEVICE:?set PRUSALINK_DEVICE to your printer's by-id path - run `ls -l /dev/serial/by-id/` to find it}:/dev/ttyACM0
 
     volumes:
       # Every mutable thing PrusaLink owns: uploaded gcode, printer settings,

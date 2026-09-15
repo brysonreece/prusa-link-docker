@@ -24,10 +24,13 @@ cd prusa-link-docker
 
 # Find your printer's stable device path
 ls -l /dev/serial/by-id/
+
+# Point PRUSALINK_DEVICE at it
+cp .env.example .env
+$EDITOR .env
 ```
 
-Put that path into `compose.yaml` under `devices:`, set `PUID`/`PGID` to match
-your user (`id -u`, `id -g`), then:
+Set `PUID`/`PGID` in `compose.yaml` to match your user (`id -u`, `id -g`), then:
 
 ```bash
 docker compose up -d
@@ -86,6 +89,18 @@ The container runs as a normal user with `no-new-privileges`.
 reboot, and the printer silently becomes `ttyACM1`. The `by-id` path derives
 from the printer's own serial number and never changes. It is mapped *to*
 `/dev/ttyACM0` inside the container so the config stays boring.
+
+The path comes from `PRUSALINK_DEVICE` in your `.env` rather than being
+hardcoded with a placeholder. Forget to set it and compose tells you what to
+do:
+
+```
+required variable PRUSALINK_DEVICE is missing a value: set PRUSALINK_DEVICE
+to your printer's by-id path - run `ls -l /dev/serial/by-id/` to find it
+```
+
+which beats Docker's `no such file or directory` for a path you were supposed
+to have replaced.
 
 ### `/run/udev:/run/udev:ro`
 
